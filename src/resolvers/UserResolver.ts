@@ -6,6 +6,7 @@ import {
   Arg,
   Resolver,
   Mutation,
+  Query,
 } from "type-graphql";
 import { MyContext } from "../types";
 import { User } from "../entity/user";
@@ -55,7 +56,7 @@ export class UserResolver {
     @Arg("input")
     input: RegisterInput,
     @Ctx()
-    { em }: MyContext
+    { em, req }: MyContext
   ): Promise<UserResponse> {
     try {
       if (input.name.length < 3) {
@@ -73,7 +74,7 @@ export class UserResolver {
           errors: [
             {
               field: "password",
-              message: "name must be longer than six characters",
+              message: "password must be longer than six characters",
             },
           ],
         };
@@ -85,6 +86,8 @@ export class UserResolver {
         password: hash,
       } as RequiredEntityData<User>);
       await em.persistAndFlush(user);
+
+      req.session.userId = user.id;
       return {
         user,
       };
@@ -111,11 +114,11 @@ export class UserResolver {
   }
 
   @Mutation(() => UserResponse)
-  async Login(
+  async login(
     @Arg("input", () => LoginInput)
     input: LoginInput,
     @Ctx()
-    { em }: MyContext
+    { em, req }: MyContext
   ): Promise<UserResponse> {
     try {
       const user = await em.findOne(User, { email: input.email });
@@ -138,6 +141,7 @@ export class UserResolver {
             },
           ],
         };
+      req.session.userId = user.id;
       return { user };
     } catch (error: any) {
       return {
@@ -149,5 +153,16 @@ export class UserResolver {
         ],
       };
     }
+  }
+
+  @Query(() => User, { nullable: true })
+  async me(
+    @Ctx()
+    { em, req }: MyContext
+  ) {
+    console.log(req.session);
+    const id = req.session.userId;
+    const user = await em.findOne(User, { id });
+    return user;
   }
 }
