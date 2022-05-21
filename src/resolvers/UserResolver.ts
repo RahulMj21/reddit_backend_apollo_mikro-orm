@@ -155,12 +155,29 @@ export class UserResolver {
     }
   }
 
+  @Mutation(() => Boolean)
+  async logout(
+    @Ctx()
+    { req, res }: MyContext
+  ) {
+    return new Promise((resolve) => {
+      req.session.destroy((err) => {
+        if (err) {
+          console.log("logout error --> ", err), resolve(false);
+          return;
+        } else {
+          res.clearCookie("qid");
+          resolve(true);
+        }
+      });
+    });
+  }
+
   @Query(() => User, { nullable: true })
   async me(
     @Ctx()
     { em, req }: MyContext
   ) {
-    console.log(req.session);
     const id = req.session.userId;
     const user = await em.findOne(User, { id });
     return user;
