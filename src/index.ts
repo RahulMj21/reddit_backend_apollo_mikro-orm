@@ -7,16 +7,13 @@ import mikroConfig from "../mikro-orm.config";
 import config from "config";
 import { ApolloServer } from "apollo-server-express";
 import { buildSchema } from "type-graphql";
-import {
-  ApolloServerPluginLandingPageGraphQLPlayground,
-  ApolloServerPluginLandingPageDisabled,
-} from "apollo-server-core";
+import { ApolloServerPluginLandingPageGraphQLPlayground } from "apollo-server-core";
 import { HelloResolver } from "./resolvers/HelloResolver";
 import PostResolver from "./resolvers/PostResolver";
 import { UserResolver } from "./resolvers/UserResolver";
 import session from "express-session";
 import connectRedis from "connect-redis";
-import { createClient } from "redis";
+import Redis from "ioredis";
 import cors from "cors";
 
 const port = config.get<number>("port");
@@ -38,15 +35,14 @@ async function main() {
   );
 
   const RedisStore = connectRedis(session);
-  const redisClient = createClient({ legacyMode: true });
-  await redisClient.connect().catch(console.error);
+  const redis = new Redis();
+  // await redis.connect().catch(console.error);
 
   app.use(
     session({
       name: "qid",
       store: new RedisStore({
-        // @ts-ignore
-        client: redisClient,
+        client: redis,
         disableTouch: true,
       }),
       cookie: {
@@ -67,11 +63,8 @@ async function main() {
       resolvers: [HelloResolver, PostResolver, UserResolver],
       validate: false,
     }),
-    plugins: [
-      ApolloServerPluginLandingPageGraphQLPlayground(),
-      ApolloServerPluginLandingPageDisabled(),
-    ],
-    context: ({ req, res }) => ({ em: orm.em, req, res }),
+    plugins: [ApolloServerPluginLandingPageGraphQLPlayground()],
+    context: ({ req, res }) => ({ em: orm.em, req, res, redis }),
   });
 
   await apolloServer.start();

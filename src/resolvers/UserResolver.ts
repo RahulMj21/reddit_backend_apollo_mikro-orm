@@ -12,6 +12,10 @@ import { MyContext } from "../types";
 import { User } from "../entity/user";
 import argon from "argon2";
 import { RequiredEntityData } from "@mikro-orm/core";
+import CustomError from "../utils/CustomError";
+import sendMail from "../utils/sendMail";
+import { v4 } from "uuid";
+import config from "config";
 
 @InputType()
 export class RegisterInput {
@@ -32,6 +36,14 @@ export class LoginInput {
   @Field()
   password!: string;
 }
+@InputType()
+export class ResetPasswordInput {
+  @Field(() => String!)
+  token!: string;
+
+  @Field(() => String!)
+  newPassword!: string;
+}
 @ObjectType()
 export class FieldError {
   @Field()
@@ -47,6 +59,14 @@ export class UserResponse {
 
   @Field(() => User, { nullable: true })
   user?: User;
+}
+@ObjectType()
+export class ForgotPasswordResponse {
+  @Field(() => [FieldError], { nullable: true })
+  errors?: FieldError[];
+
+  @Field(() => Boolean, { nullable: true })
+  success?: Boolean;
 }
 
 @Resolver()
@@ -124,33 +144,18 @@ export class UserResolver {
       const user = await em.findOne(User, { email: input.email });
       if (!user)
         return {
-          errors: [
-            {
-              field: "email",
-              message: "wrong email",
-            },
-          ],
+          errors: [new CustomError("email", "wrong email")],
         };
       const isMatched = await argon.verify(user.password, input.password);
       if (!isMatched)
         return {
-          errors: [
-            {
-              field: "password",
-              message: "wrong password",
-            },
-          ],
+          errors: [new CustomError("password", "wrong password")],
         };
       req.session.userId = user.id;
       return { user };
     } catch (error: any) {
       return {
-        errors: [
-          {
-            field: "system_error",
-            message: "internal server error",
-          },
-        ],
+        errors: [new CustomError("system_error", "something went wrong")],
       };
     }
   }
@@ -181,5 +186,74 @@ export class UserResolver {
     const id = req.session.userId;
     const user = await em.findOne(User, { id });
     return user;
+  }
+
+  @Mutation(() => ForgotPasswordResponse)
+  async forgotPassword(
+    @Arg("email", () => String!)
+    email: string,
+    @Ctx()
+    { em, redis }: MyContext
+  ): Promise<ForgotPasswordResponse> {
+    try {
+      const user = await em.findOne(User, { email });
+      if (!user) {
+        return {
+          errors: [new CustomError("email", "email not registered")],
+        };
+      }
+
+      const token = v4();
+      const html = `<a>http://localhost:3000/forgotpassword/${token}</a>`;
+
+      const isMailSent = await sendMail(email, html);
+      if (!isMailSent) {
+        return {
+          errors: [new CustomError("email", "email cannot be sent")],
+        };
+      } else {
+        await redis.set(
+          config.get<string>("forgotPasswordPrefix") + token,
+          user.id,
+          "EX",
+          1000 * 60 * 60 // 1 hour
+        );
+        return {
+          success: true,
+        };
+      }
+    } catch (error: any) {
+      return { errors: [new CustomError("email", "went wront")] };
+    }
+  }
+
+  @Mutation(() => UserResponse)
+  async resetPassword(
+    @Arg("input")
+    { token, newPassword }: ResetPasswordInput,
+    @Ctx()
+    { em, redis }: MyContext
+  ) {
+    if (newPassword.length < 6) {
+      return {
+        errors: [
+          new CustomError("password", "password must me 6 characters long"),
+        ],
+      };
+    }
+    const key = config.get<string>("forgotPasswordPrefix") + token;
+    const userId = await redis.get(key);
+    if (!userId) {
+      return { errors: [new CustomError("token", "token expired")] };
+    }
+    const id = parseInt(userId);
+    const user = await em.findOne(User, { id });
+    if (!user) {
+      return { errors: [new CustomError("token", "token expired")] };
+    }
+    const hash = await argon.hash(newPassword);
+    user.password = hash;
+    em.persistAndFlush(user);
+    return { user };
   }
 }
